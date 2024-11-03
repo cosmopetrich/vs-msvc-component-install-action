@@ -1,0 +1,77 @@
+name: vs-msvc-component-install
+description: Install a specific version of the MSVC component for Visual Studio
+inputs:
+  version:
+    description: Version of the component to install
+    required: true
+  toolset-version:
+    description: Version of the underlying toolset that the component is expected to install
+  cache-key-prefix:
+    description: Prefix to use when naming cache items
+    required: true
+    default: vs-msvc-component-
+  cache-save:
+    description: Whether to save to the cache on a successfull installation
+    required: true
+    default: true
+  vs-installer-path:
+    description: Absolute path of the Visual Studio installer
+    required: true
+    default: 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe'
+  vs-install-directory:
+    description: Absolute path of Visual Studio installation (*must* use backslashes)
+    required: true
+    default: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
+  vs-toolset-directory:
+    description: Absolute path under which toolsets are installed
+    default: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC'
+runs:
+  using: "composite"
+  steps:
+    - name: List available toolsets pre-install
+      shell: bash
+      run: |
+        echo "------------------------------"
+        echo "Available toolsets pre-install are:"
+        ls -1 '${{ inputs.vs-toolset-directory }}'
+        echo "------------------------------"
+    - name: Retrieve cache
+      uses: actions/cache/restore@v4
+      if: ${{ inputs.toolset-version }}
+      with:
+        path: '${{ inputs.vs-toolset-directory }}\${{ inputs.toolset-version }}'
+        key: ${{ inputs.cache-key-prefix }}${{ inputs.toolset-version }}
+    - name: Check if expected toolset is already available
+      id: toolset
+      if: ${{ inputs.toolset-version }}
+      shell: bash
+      run: |
+        if [ -d '${{ inputs.vs-toolset-directory }}\${{ inputs.toolset-version }}' ]; then
+          echo "available=yes" >> "${GITHUB_OUTPUT}"
+        fi
+    - name: Run VS installer
+      id: install
+      if: ${{ ! steps.toolset.outputs.available }}
+      shell: bash
+      run: |
+        COMPONENT_VERSION="$(tr - . <<< '${{ inputs.version }}' | sed 's/^v//' )"
+        '${{ inputs.vs-installer-path }}' modify --installPath '${{ inputs.vs-install-directory }}' --quiet --norestart --nocache \
+        --add "Microsoft.VisualStudio.Component.VC.${COMPONENT_VERSION}.x86.x64" \
+        && cat "${TEMP}"/dd_installer_elevated_*.log || ( cat "${TEMP}"/dd_installer_elevated_*.log; exit 1 )
+    - name: List available toolsets post-install
+      shell: bash
+      run: |
+        echo "------------------------------"
+        echo "Available toolsets post-install are:"
+        ls -1 '${{ inputs.vs-toolset-directory }}'
+        echo "------------------------------"
+    - name: Check for expected toolset version
+      if: ${{ inputs.toolset-version }}
+      shell: bash
+      run: "[ -d '${{ inputs.vs-toolset-directory }}\\${{ inputs.toolset-version }}' ]"
+    - name: Save cache
+      uses: actions/cache/save@v4
+      if: ${{ inputs.toolset-version && inputs.cache-save && steps.install.outcome == 'success' }}
+      with:
+        path: '${{ inputs.vs-toolset-directory }}\${{ inputs.toolset-version }}'
+        key: ${{ inputs.cache-key-prefix }}${{ inputs.toolset-version }}
