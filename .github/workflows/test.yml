@@ -1,0 +1,120 @@
+name: Tests
+on:
+  pull_request:
+    paths-ignore:
+      - LICENSE
+      - "*.md"
+  push:
+    branches:
+      - "v*"
+    paths-ignore:
+      - LICENSE
+      - "*.md"
+  workflow_dispatch:
+
+concurrency:
+  # Cancel in-progress tests on a new push to the same branch/PR
+  # https://stackoverflow.com/questions/70928424/limit-github-action-workflow-concurrency-on-push-and-pull-request
+  group: ${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  generic:
+    name: Generic
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Generic test
+          - id: generic
+            version: "14.36.17.6"
+          # Installs/caches a specific toolset version
+          - id: toolset-version
+            version: "v14.36-17.6"
+            toolset-version: "14.36.32532"
+          # Does not install if the specified toolset version already exists
+          # (test may be fragile if the default versions in the image change)
+          - id: no-install
+            test-absent-toolset-version: "14.36.32532"
+            version: "14.36.17.6"
+            toolset-version: "14.41.34120"
+          # Fails if the specified toolset version was not be installed
+          - id: xfail-notoolset
+            test-xfail: true
+            version: "14.36.17.6"
+            toolset-version: "1.2.3.4"
+    steps:
+      - name: Set constants
+        id: cons
+        shell: bash
+        run: |
+          echo 'cache-key=disabled-${{ github.run_number }}-${{ github.run_attempt }}-${{ matrix.id }}-${{ matrix.toolset-version }}' >> "${GITHUB_OUTPUT}"
+          echo 'toolset-dir=C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC' >> "${GITHUB_OUTPUT}"
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run action
+        id: msvc
+        continue-on-error: ${{ matrix.test-xfail || false }}
+        uses: ./
+        with:
+          version: ${{ matrix.version }}
+          cache-save: false
+          cache-key-prefix: ${{ steps.cons.outputs.cache-key }}
+          toolset-version: ${{ matrix.toolset-version }}
+      - name: Find expected version
+        if: ${{ ! matrix.test-xfail && matrix.toolset-version }}
+        shell: bash
+        run: "[ -d '${{ steps.cons.outputs.toolset-dir }}\\${{ matrix.toolset-version }}' ]"
+      - name: Check cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: '${{ runner.temp }}\cache-test-${{ github.run_number }}-${{ github.run_attempt }}'
+          key: ${{ steps.cons.outputs.cache-key }}
+      - name: Ensure cache check missed
+        if: ${{ steps.cache.outputs.cache-hit == 'true' }}
+        shell: bash
+        run: "false"
+      - name: Toolset is absent
+        if: ${{ matrix.test-absent-toolset-version }}
+        shell: bash
+        run: "[ ! -d '${{ steps.cons.outputs.toolset-dir }}\\${{ matrix.test-absent-toolset-version }}' ]"
+      - name: Expect failure
+        if: ${{ matrix.test-xfail }}
+        shell: bash
+        run: "[ '${{ steps.msvc.outcome }}' = 'failure' ]"
+  with-cache-1:
+    name: Cache (1)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run action
+        id: msvc
+        continue-on-error: ${{ matrix.test-xfail || false }}
+        uses: ./
+        with:
+          version: "14.36.17.6"
+          cache-key-prefix: test-${{ github.run_number }}-${{ github.run_attempt }}-
+          cache-save: true
+          toolset-version: "14.36.32532"
+  with-cache-2:
+    name: Cache (2)
+    needs: with-cache-1
+    runs-on: windows-2022
+    steps:
+      # Currently there doesn't seem to be a great way to check if the cache was actually hit
+      # Since scope appears to keeps a cache/retrieve done as a step from seeing the cache inside the composite action
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run action
+        id: msvc
+        uses: ./
+        with:
+          version: "14.36.17.6"
+          cache-key-prefix: test-${{ github.run_number }}-${{ github.run_attempt }}-
+          toolset-version: "14.36.32532"
+      - name: Find expected version
+        shell: bash
+        run: "[ -d 'C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Tools\\MSVC\\14.36.32532' ]"
